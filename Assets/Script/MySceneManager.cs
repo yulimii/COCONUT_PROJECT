@@ -9,18 +9,18 @@ public class MySceneManager : MonoBehaviour
 
     public void LoadNextScene(string _nextSceneName)
     {
-        PlayerPer.SetString(nextSceneNamekey, _nextSceneName);
-        StartCorutine(LoadScene());
+        //PlayerPrefeb.SetString(nextSceneNamekey, _nextSceneName);
+        //StartCorutine(LoadScene());
     }
 
-    IEumerator LoadScene()
-    {
-        AsyncOperation asyncOperation = MySceneManager.LoadSceneAsync(transitionSceneName);
-
-        while (!asyncOperation.isDone)
-        {
-            yield return null;
-        }
-    }
+    //IEnumerator LoadScene()
+    //{
+    //    AsyncOperation asyncOperation = MySceneManager.LoadSceneAsync(transitionSceneName);
+    //
+    //    while (!asyncOperation.isDone)
+    //    {
+    //        yield return null;
+    //    }
+    //}
 
 }

@@ -43,11 +43,7 @@ public class GameManager : MonoBehaviour
     }
 }
 
-
-
-
-
-public class SaveLoadSystem()
+public class SaveLoadSystem
 {
     public SaveLoadSystem()
     {
