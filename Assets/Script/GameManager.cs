@@ -12,8 +12,9 @@ public class GameManager : MonoBehaviour
             return;
         }
         Instance = this;
+        DontDestroyOnLoad(this);
 
-
+        LoadData();
     }
 
     void LoadData()
