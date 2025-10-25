@@ -15,114 +15,50 @@ public class PlayerController : MonoBehaviour, InputSystem_Actions.IPlayerAction
         input.Battle.SetCallbacks(this);
     }
 
-    private void OnEnable()
-    {
-        EnableCurrentMap();
-    }
+    private void OnEnable()  => EnableCurrentMap();
+    private void OnDisable() => input.Disable();
 
-    private void OnDisable()
-    {
-        input.Disable();
-    }
-
-    public void SwitchToBattle()
-    {
-        isBattle = true;
-        EnableCurrentMap();
-    }
-
-    public void SwitchToLevel()
-    {
-        isBattle = false;
-        EnableCurrentMap();
-    }
+    public void SwitchToBattle() { isBattle = true;  EnableCurrentMap(); }
+    public void SwitchToLevel()  { isBattle = false; EnableCurrentMap(); }
 
     private void EnableCurrentMap()
     {
         input.Disable();
-
-        if (isBattle)
-        {
-            input.Battle.Enable();
-        }
-        else
-        {
-            input.Player.Enable();
-        }
-
+        if (isBattle) input.Battle.Enable();
+        else          input.Player.Enable();
         input.UI.Enable();
     }
 
     // Player Actions
-
     public void OnMove(InputAction.CallbackContext ctx)
     {
-        if (!isBattle)
-        {
-            moveInput = ctx.ReadValue<Vector2>();
-        }
+        if (!isBattle) moveInput = ctx.ReadValue<Vector2>();
     }
-
     public void OnInteract(InputAction.CallbackContext ctx)
     {
-        if (!isBattle && ctx.performed)
-        {
-            Debug.Log("Interact!");
-        }
+        if (!isBattle && ctx.performed) Debug.Log("Interact!");
     }
-
     public void OnCancel(InputAction.CallbackContext ctx)
     {
-        if (ctx.performed)
-        {
-            Debug.Log("Cancel pressed");
-        }
+        if (ctx.performed) Debug.Log("Cancel pressed");
     }
 
     // Battle Actions
-
     public void OnLaneA(InputAction.CallbackContext ctx)
     {
-        if (isBattle && ctx.performed)
-        {
-            if (judge != null)
-            {
-                judge.HandleInput(LaneId.A);
-            }
-        }
+        if (isBattle && ctx.performed && judge != null) judge.HandleInput(LaneId.A);
     }
-
     public void OnLaneB(InputAction.CallbackContext ctx)
     {
-        if (isBattle && ctx.performed)
-        {
-            if (judge != null)
-            {
-                judge.HandleInput(LaneId.B);
-            }
-        }
+        if (isBattle && ctx.performed && judge != null) judge.HandleInput(LaneId.B);
     }
-
     public void OnLaneC(InputAction.CallbackContext ctx)
     {
-        if (isBattle && ctx.performed)
-        {
-            if (judge != null)
-            {
-                judge.HandleInput(LaneId.C);
-            }
-        }
+        if (isBattle && ctx.performed && judge != null) judge.HandleInput(LaneId.C);
     }
-
     public void OnLaneD(InputAction.CallbackContext ctx)
     {
-        if (isBattle && ctx.performed)
-        {
-            if (judge != null)
-            {
-                judge.HandleInput(LaneId.D);
-            }
-        }
+        if (isBattle && ctx.performed && judge != null) judge.HandleInput(LaneId.D);
     }
 
     private void Update()

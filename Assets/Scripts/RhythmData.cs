@@ -9,6 +9,25 @@ public enum HitAccuracy
     Perfect
 }
 
+// 레인(트랙) 식별자: A~D. UI/노트 차트와 동일 순서로 매핑
+public enum LaneId { A = 0, B = 1, C = 2, D = 3 }
+
+[System.Serializable]
+public struct NoteData
+{
+    // 노트 목표 시각(절대 초, double). BPM→BeatIndex→초로 환산한 값
+    public double timeSec;
+    // 노트가 속한 레인
+    public LaneId lane;
+}
+
+public struct HitEvent
+{
+    public NoteData note;        // 대상 노트 정보
+    public HitAccuracy grade;    // 최종 판정 등급
+    public float deltaMs;        // 입력시각-타겟시각(ms)
+}
+
 [System.Serializable]
 public class RhythmData
 {
@@ -24,8 +43,8 @@ public class RhythmData
 
     [Header("Hit Judgment Windows (초)")]
     [SerializeField] private float perfectWindow = 0.05f;   // ±50ms
-    [SerializeField] private float greatWindow = 0.1f;     // ±100ms
-    [SerializeField] private float goodWindow = 0.15f;     // ±150ms
+    [SerializeField] private float greatWindow = 0.10f;     // ±100ms
+    [SerializeField] private float goodWindow = 0.15f;      // ±150ms
 
     [Header("Current Game State")]
     [SerializeField] private int currentScore = 0;
@@ -128,10 +147,7 @@ public class RhythmData
         return beatProgress * trackWidth;
     }
 
-    public float GetCurrentBarPosition()
-    {
-        return GetBarPositionAtTime(CurrentGameTime);
-    }
+    public float GetCurrentBarPosition() => GetBarPositionAtTime(CurrentGameTime);
 
     // === 타이밍 판정 ===
     public HitAccuracy JudgeHitAccuracy(float inputTime, float targetTime)
@@ -167,7 +183,7 @@ public class RhythmData
         return (int)(baseScore * comboMultiplier);
     }
 
-    // === 게임 상태 초기화 ===
+    // === 게임 상태 ===
     public void StartGame()
     {
         isPlaying = true;
@@ -177,10 +193,7 @@ public class RhythmData
         maxCombo = 0;
     }
 
-    public void StopGame()
-    {
-        isPlaying = false;
-    }
+    public void StopGame() => isPlaying = false;
 
     public void ResetGame()
     {
@@ -191,7 +204,6 @@ public class RhythmData
         gameStartTime = 0f;
     }
 
-    // === 디버그 정보 ===
     public override string ToString()
     {
         return $"BPM: {bpm:F1} | Score: {currentScore} | Combo: {combo} | Playing: {isPlaying}";

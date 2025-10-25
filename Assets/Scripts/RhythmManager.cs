@@ -1,335 +1,220 @@
 using UnityEngine;
 using System.Collections;
+using System.Collections.Generic;
 
+/// <summary>
+/// 리듬 게임의 오케스트레이션(주입/모드전환/점수반영/뷰갱신)을 담당하는 매니저.
+/// - IMusicCore(예: SoundManager) → BeatJudgeSystem에 주입
+/// - PlayerController의 입력 맵 전환(Level/Battle)
+/// - BeatJudgeSystem의 판정 이벤트 수신 → RhythmData 점수/콤보 갱신 → RhythmView 반영
+/// - 판정 윈도우/차트 로딩을 단일 진입점으로 제공
+/// </summary>
 public class RhythmManager : MonoBehaviour
 {
-    [Header("Rhythm Settings")]
-    [SerializeField] private RhythmData rhythmData;
-    [SerializeField] private bool showDebugMessages = true;
+    [Header("Model / View")]
+    [SerializeField] private RhythmData rhythmData;   // 점수, 콤보, 판정윈도우 등 단일 소스
+    [SerializeField] private RhythmView rhythmView;   // 점수/콤보/BPM UI, 바/판정선 표시
 
-    [Header("UI Reference")]
-    [SerializeField] private RhythmView rhythmView;
+    [Header("Controllers")]
+    [SerializeField] private BeatJudgeSystem judge;        // 판정기
+    [SerializeField] private PlayerController player;      // 입력 주체(맵 전환)
+    [Tooltip("IMusicCore 구현체를 드래그(예: SoundManager)")]
+    [SerializeField] private MonoBehaviour musicClockBehaviour; // IMusicCore
 
-    [Header("Input Settings")]
-    [SerializeField] private KeyCode rhythmInputKey = KeyCode.Space;
-    [SerializeField] private bool allowMultipleInputs = false;
+    [Header("Auto Start (테스트용)")]
+    [SerializeField] private bool autoStartBattle = false;
+    [SerializeField] private float startDelaySec = 0.5f;
 
-    [Header("Game Control")]
-    [SerializeField] private bool autoStartGame = false;
-    [SerializeField] private float gameStartDelay = 1f;
+    [Header("Debug")]
+    [SerializeField] private bool showDebug = true;
 
-    private bool hasInputThisBeat = false;
-    private int lastProcessedBeat = -1;
-
-    // === 초기화 ===
-    void Start()
+    // ─────────────────────────────────────────────────────────────
+    // Unity Lifecycle
+    // ─────────────────────────────────────────────────────────────
+    private void Awake()
     {
-        Debug.Log("🎵 [RHYTHM MANAGER] RhythmManager Start() 호출됨!");
+        // Null 자동 탐색(선택)
+        if (rhythmView == null) rhythmView = FindFirstObjectByType<RhythmView>();
+        if (judge == null)      judge      = FindFirstObjectByType<BeatJudgeSystem>();
+        if (player == null)     player     = FindFirstObjectByType<PlayerController>();
 
-        // RhythmData 초기화
-        if (rhythmData == null)
+        // Judge에 클럭(IMusicCore) 주입
+        if (judge != null && musicClockBehaviour != null)
+            judge.musicClockBehaviour = musicClockBehaviour;
+
+        // Player → Judge 연결 보장
+        if (player != null) player.judge = judge;
+
+        // Judge 이벤트 구독
+        if (judge != null)
         {
-            rhythmData = new RhythmData();
-            if (showDebugMessages)
-            {
-                Debug.Log("🎵 [RHYTHM MANAGER] RhythmData 자동 생성");
-            }
+            judge.OnBeat += HandleBeat;
+            judge.OnHit  += HandleHit;
         }
 
-        // RhythmView 자동 찾기
-        if (rhythmView == null)
+        // 초기 View 세팅
+        if (rhythmView != null)
         {
-            rhythmView = FindFirstObjectByType<RhythmView>();
-            if (rhythmView == null && showDebugMessages)
-            {
-                Debug.LogWarning("⚠️ [RHYTHM MANAGER] RhythmView not found in scene!");
-            }
-            else if (rhythmView != null)
-            {
-                Debug.Log("✅ [RHYTHM MANAGER] RhythmView 자동 찾기 성공!");
-            }
-        }
-
-        // 초기 UI 업데이트
-        UpdateRhythmView();
-
-        // 자동 시작 설정
-        if (autoStartGame)
-        {
-            StartCoroutine(AutoStartGameCoroutine());
-        }
-
-        if (showDebugMessages)
-        {
-            Debug.Log($"✅ [RHYTHM MANAGER] 초기화 완료 - BPM: {rhythmData.BPM}");
-        }
-    }
-
-    void Update()
-    {
-        if (rhythmData.IsPlaying)
-        {
-            // 바 위치 업데이트
-            UpdateBarPosition();
-
-            // 새 비트 감지 및 처리
-            HandleBeatDetection();
-
-            // 입력 처리
-            HandleRhythmInput();
-
-            // UI 업데이트
+            rhythmView.SetJudgmentLinePosition(rhythmData.JudgmentLinePosition, rhythmData.TrackWidth);
             UpdateRhythmView();
         }
     }
 
-    // === 게임 시작/종료 ===
-    public void StartRhythmGame()
+    private void OnDestroy()
+    {
+        if (judge != null)
+        {
+            judge.OnBeat -= HandleBeat;
+            judge.OnHit  -= HandleHit;
+        }
+    }
+
+    private void Start()
+    {
+        if (autoStartBattle)
+            StartCoroutine(CoAutoStart());
+    }
+
+    private IEnumerator CoAutoStart()
+    {
+        yield return new WaitForSeconds(startDelaySec);
+        StartBattleMode(); // 차트는 외부에서 LoadChart로 넣거나, 사전에 judge.notes에 세팅
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Public Orchestration API
+    // ─────────────────────────────────────────────────────────────
+
+    /// <summary>RhythmData의 판정 윈도우를 Judge에 동기화</summary>
+    public void ApplyWindowsFromData()
+    {
+        if (judge == null || rhythmData == null) return;
+        judge.perfect = rhythmData.PerfectWindow;
+        judge.great   = rhythmData.GreatWindow;
+        judge.good    = rhythmData.GoodWindow;
+    }
+
+    /// <summary>외부에서 빌드한 차트(List&lt;NoteData&gt;)를 주입</summary>
+    public void LoadChart(List<NoteData> notes)
+    {
+        if (judge == null || notes == null) return;
+        judge.notes = notes;
+    }
+
+    /// <summary>배틀(리듬) 모드를 시작. 차트가 있으면 함께 주입</summary>
+    public void StartBattleMode(List<NoteData> notes = null)
     {
         rhythmData.StartGame();
-        hasInputThisBeat = false;
-        lastProcessedBeat = -1;
+        ApplyWindowsFromData();
+        if (notes != null) LoadChart(notes);
 
+        // 입력맵 전환
+        if (player != null) player.SwitchToBattle();
+
+        // UI 표시
         if (rhythmView != null)
         {
             rhythmView.ShowRhythmGame();
             rhythmView.SetJudgmentLinePosition(rhythmData.JudgmentLinePosition, rhythmData.TrackWidth);
         }
 
-        if (showDebugMessages)
-        {
-            Debug.Log($"🎵 [RHYTHM MANAGER] 리듬 게임 시작! BPM: {rhythmData.BPM}");
-        }
+        if (showDebug) Debug.Log($"[RhythmManager] Battle Start - BPM:{rhythmData.BPM}");
+        UpdateRhythmView();
     }
 
-    public void StopRhythmGame()
+    /// <summary>배틀(리듬) 모드를 종료</summary>
+    public void StopBattleMode()
     {
         rhythmData.StopGame();
 
+        if (player != null) player.SwitchToLevel();
+
         if (rhythmView != null)
-        {
             rhythmView.HideRhythmGame();
-        }
 
-        if (showDebugMessages)
-        {
-            Debug.Log($"🎵 [RHYTHM MANAGER] 리듬 게임 종료 - 최종 점수: {rhythmData.CurrentScore}, 최대 콤보: {rhythmData.MaxCombo}");
-        }
-    }
-
-    // === 바 위치 업데이트 ===
-    private void UpdateBarPosition()
-    {
-        float currentBarPosition = rhythmData.GetCurrentBarPosition();
-
-        if (rhythmView != null)
-        {
-            rhythmView.UpdateBarPosition(currentBarPosition, rhythmData.TrackWidth);
-        }
-    }
-
-    // === 비트 감지 및 처리 ===
-    private void HandleBeatDetection()
-    {
-        int currentBeat = rhythmData.CurrentBeatNumber;
-
-        // 새로운 비트가 시작되었는지 확인
-        if (currentBeat != lastProcessedBeat)
-        {
-            OnNewBeat(currentBeat);
-            lastProcessedBeat = currentBeat;
-            hasInputThisBeat = false; // 새 비트에서 입력 초기화
-
-            if (showDebugMessages)
-            {
-                Debug.Log($"🥁 [RHYTHM MANAGER] 새 비트: {currentBeat} | 시간: {rhythmData.CurrentGameTime:F2}s");
-            }
-        }
-    }
-
-    // === 새 비트 처리 ===
-    private void OnNewBeat(int beatNumber)
-    {
-        // 이전 비트에서 입력이 없었다면 Miss 처리
-        if (beatNumber > 0 && !hasInputThisBeat && !allowMultipleInputs)
-        {
-            ProcessMiss();
-        }
-    }
-
-    // === 리듬 입력 처리 ===
-    private void HandleRhythmInput()
-    {
-        if (Input.GetKeyDown(rhythmInputKey))
-        {
-            // 비트당 한 번만 입력 허용 (설정에 따라)
-            if (!allowMultipleInputs && hasInputThisBeat)
-            {
-                if (showDebugMessages)
-                {
-                    Debug.Log($"⚠️ [RHYTHM INPUT] 이미 이 비트에서 입력했습니다");
-                }
-                return;
-            }
-
-            ProcessRhythmInput();
-            hasInputThisBeat = true;
-        }
-    }
-
-    // === 리듬 입력 처리 ===
-    private void ProcessRhythmInput()
-    {
-        float currentTime = rhythmData.CurrentGameTime;
-        float currentBeatTime = rhythmData.CurrentBeatTime;
-
-        // 비트의 정확한 타이밍 계산 (비트 시작점 기준)
-        float beatStartTime = rhythmData.CurrentBeatNumber * rhythmData.BeatDuration;
-        float timeDifferenceFromBeatStart = Mathf.Abs(currentBeatTime);
-
-        // 비트 끝 근처에서의 입력도 고려 (다음 비트 시작점 기준)
-        float timeDifferenceFromBeatEnd = Mathf.Abs(rhythmData.BeatDuration - currentBeatTime);
-        float actualTimeDifference = Mathf.Min(timeDifferenceFromBeatStart, timeDifferenceFromBeatEnd);
-
-        // 판정 계산
-        HitAccuracy accuracy = GetAccuracyFromTimeDifference(actualTimeDifference);
-
-        // 점수 및 콤보 처리
-        ProcessHitResult(accuracy, actualTimeDifference);
-
-        if (showDebugMessages)
-        {
-            Debug.Log($"🎯 [RHYTHM INPUT] 입력! 시간차: {actualTimeDifference:F3}s, 판정: {accuracy}, 점수: +{rhythmData.GetScoreForAccuracy(accuracy)}");
-        }
-    }
-
-    // === 타이밍 차이로 판정 계산 ===
-    private HitAccuracy GetAccuracyFromTimeDifference(float timeDifference)
-    {
-        if (timeDifference <= rhythmData.PerfectWindow)
-            return HitAccuracy.Perfect;
-        else if (timeDifference <= rhythmData.GreatWindow)
-            return HitAccuracy.Great;
-        else if (timeDifference <= rhythmData.GoodWindow)
-            return HitAccuracy.Good;
-        else
-            return HitAccuracy.Miss;
-    }
-
-    // === 타격 결과 처리 ===
-    private void ProcessHitResult(HitAccuracy accuracy, float timeDifference)
-    {
-        if (accuracy != HitAccuracy.Miss)
-        {
-            // 성공한 타격
-            rhythmData.Combo++;
-            int scoreGain = rhythmData.GetScoreForAccuracy(accuracy);
-            rhythmData.CurrentScore += scoreGain;
-        }
-        else
-        {
-            // 실패한 타격
-            rhythmData.Combo = 0;
-        }
-
-        // UI 피드백 표시
-        if (rhythmView != null)
-        {
-            rhythmView.ShowHitFeedback(accuracy);
-        }
-    }
-
-    // === Miss 처리 ===
-    private void ProcessMiss()
-    {
-        rhythmData.Combo = 0;
-
-        if (rhythmView != null)
-        {
-            rhythmView.ShowHitFeedback(HitAccuracy.Miss);
-        }
-
-        if (showDebugMessages)
-        {
-            Debug.Log($"❌ [RHYTHM MANAGER] Miss! 콤보 리셋");
-        }
-    }
-
-    // === View 업데이트 ===
-    private void UpdateRhythmView()
-    {
-        if (rhythmView != null)
-        {
-            rhythmView.UpdateScoreDisplay(
-                rhythmData.CurrentScore,
-                rhythmData.Combo,
-                rhythmData.BPM
-            );
-        }
-    }
-
-    // === 자동 시작 코루틴 ===
-    private IEnumerator AutoStartGameCoroutine()
-    {
-        yield return new WaitForSeconds(gameStartDelay);
-        StartRhythmGame();
-    }
-
-    // === 공개 메서드 ===
-    public void SetBPM(float newBPM)
-    {
-        rhythmData.BPM = newBPM;
-        if (showDebugMessages)
-        {
-            Debug.Log($"🎵 [RHYTHM MANAGER] BPM 변경: {newBPM}");
-        }
-    }
-
-    public RhythmData GetRhythmData()
-    {
-        return rhythmData;
-    }
-
-    public bool IsGameActive()
-    {
-        return rhythmData.IsPlaying;
-    }
-
-    // === Inspector 디버그 메서드 ===
-    [ContextMenu("Start Rhythm Game")]
-    private void DebugStartGame()
-    {
-        StartRhythmGame();
-    }
-
-    [ContextMenu("Stop Rhythm Game")]
-    private void DebugStopGame()
-    {
-        StopRhythmGame();
-    }
-
-    [ContextMenu("Set BPM to 60")]
-    private void DebugSetBPM60()
-    {
-        SetBPM(60f);
-    }
-
-    [ContextMenu("Set BPM to 120")]
-    private void DebugSetBPM120()
-    {
-        SetBPM(120f);
-    }
-
-    [ContextMenu("Set BPM to 180")]
-    private void DebugSetBPM180()
-    {
-        SetBPM(180f);
-    }
-
-    [ContextMenu("Reset Game")]
-    private void DebugResetGame()
-    {
-        rhythmData.ResetGame();
+        if (showDebug) Debug.Log($"[RhythmManager] Battle Stop - Score:{rhythmData.CurrentScore} MaxCombo:{rhythmData.MaxCombo}");
         UpdateRhythmView();
     }
+
+    /// <summary>BPM 변경(뷰 갱신 포함)</summary>
+    public void SetBPM(float bpm)
+    {
+        rhythmData.BPM = bpm;
+        UpdateRhythmView();
+        if (showDebug) Debug.Log($"[RhythmManager] BPM -> {bpm}");
+    }
+
+    /// <summary>판정창(초) 변경 후 Judge에 즉시 반영</summary>
+    public void SetJudgeWindows(float perfect, float great, float good)
+    {
+        rhythmData.PerfectWindow = perfect;
+        rhythmData.GreatWindow   = great;
+        rhythmData.GoodWindow    = good;
+        ApplyWindowsFromData();
+        if (showDebug) Debug.Log($"[RhythmManager] Windows -> P:{perfect:F3} G:{great:F3} D:{good:F3}");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Judge Events
+    // ─────────────────────────────────────────────────────────────
+
+    private void HandleBeat(int beatIndex)
+    {
+        // 필요 시 비트 하이라이트, 이펙트 트리거 등
+        // rhythmView.HighlightBeat(beatIndex); 같은 형태로 확장 가능
+        if (showDebug) Debug.Log($"[RhythmManager] Beat {beatIndex}");
+    }
+
+    private void HandleHit(HitEvent e)
+    {
+        // 점수/콤보 처리 (Miss는 콤보 리셋)
+        if (e.grade == HitAccuracy.Miss)
+        {
+            rhythmData.Combo = 0;
+        }
+        else
+        {
+            rhythmData.Combo += 1;
+            rhythmData.CurrentScore += rhythmData.GetScoreForAccuracy(e.grade);
+        }
+
+        // UI 피드백
+        if (rhythmView != null)
+            rhythmView.ShowHitFeedback(e.grade);
+
+        UpdateRhythmView();
+
+        if (showDebug)
+            Debug.Log($"[RhythmManager] Hit {e.grade} Δ={e.deltaMs:F1}ms  Score:{rhythmData.CurrentScore} Combo:{rhythmData.Combo}");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // View Update
+    // ─────────────────────────────────────────────────────────────
+
+    private void UpdateRhythmView()
+    {
+        if (rhythmView == null) return;
+        rhythmView.UpdateScoreDisplay(
+            rhythmData.CurrentScore,
+            rhythmData.Combo,
+            rhythmData.BPM
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Inspector Helpers (테스트용)
+    // ─────────────────────────────────────────────────────────────
+
+    [ContextMenu("Start Battle Mode")]
+    private void _TestStart() => StartBattleMode();
+
+    [ContextMenu("Stop Battle Mode")]
+    private void _TestStop()  => StopBattleMode();
+
+    [ContextMenu("Set BPM 120")]
+    private void _TestBpm120() => SetBPM(120f);
+
+    [ContextMenu("Set Judge Windows (0.05/0.10/0.15)")]
+    private void _TestWindows() => SetJudgeWindows(0.05f, 0.10f, 0.15f);
 }

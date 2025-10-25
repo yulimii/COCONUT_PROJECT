@@ -5,7 +5,7 @@ using System.Collections.Generic;
 public class BeatJudgeSystem : MonoBehaviour
 {
     [Header("Clock (IMusicCore)")]
-    public MonoBehaviour musicClockBehaviour; 
+    public MonoBehaviour musicClockBehaviour;    // SoundManager 등 IMusicCore 구현체
 
     private IMusicCore _clock;
 
@@ -13,9 +13,9 @@ public class BeatJudgeSystem : MonoBehaviour
     public event Action<HitEvent> OnHit;
 
     [Header("Hit (sec)")]
-    public float perfect = 0.050f; 
-    public float good = 0.100f; 
-    public float miss = 0.180f; 
+    public float perfect = 0.050f;
+    public float great   = 0.100f;
+    public float good    = 0.150f;
 
     [Header("Search (sec)")]
     public float consumeWindowSec = 0.20f; 
@@ -26,93 +26,62 @@ public class BeatJudgeSystem : MonoBehaviour
     private void Awake()
     {
         _clock = musicClockBehaviour as IMusicCore;
-
         if (_clock == null)
-        {
             Debug.LogError("musicClockBehaviour must implement IMusicCore.");
-        }
     }
 
     private void OnEnable()
     {
-        if (_clock != null)
-        {
-            _clock.OnBeat += HandleClockBeat;
-        }
+        if (_clock != null) _clock.OnBeat += HandleClockBeat;
     }
 
     private void OnDisable()
     {
-        if (_clock != null)
-        {
-            _clock.OnBeat -= HandleClockBeat;
-        }
+        if (_clock != null) _clock.OnBeat -= HandleClockBeat;
     }
 
     private void HandleClockBeat(int beatIndex)
     {
-        if (OnBeat != null)
-        {
-            OnBeat.Invoke(beatIndex);
-        }
+        OnBeat?.Invoke(beatIndex);
     }
 
     public void HandleInput(LaneId lane)
     {
-        if (_clock == null)
+        if (_clock == null) return;
+
+        double nowSec = _clock.NowSec;
+
+        if (!TryGetNearestTarget(lane, nowSec, out var target, out var deltaSec))
         {
+            Emit(new HitEvent { note = default, grade = HitAccuracy.Miss, deltaMs = 999.0f });
             return;
         }
 
-        double dTime = _clock.NowSec;
+        // 판정
+        float absDelta = Mathf.Abs((float)deltaSec);
+        HitAccuracy grade = Judge(absDelta);
 
-        if (!TryGetNearestTarget(lane, dTime, out var target, out var deltaSec))
+        Emit(new HitEvent
         {
-            var missEvent = new HitEvent
-            {
-                note = default,
-                grade = HitGrade.MISS,
-                deltaMs = 999.0f
-            };
-
-            Emit(missEvent);
-            return;
-        }
-
-        HitGrade grade = Judge(Mathf.Abs((float)deltaSec));
-
-        var hitEvent = new HitEvent
-        {
-            note = target,
-            grade = grade,
+            note   = target,
+            grade  = grade,
             deltaMs = (float)(deltaSec * 1000.0f)
-        };
+        });
 
-        Emit(hitEvent);
-
-        if (grade != HitGrade.LATE)
-        {
+        // 성공 판정만 소모
+        if (grade != HitAccuracy.Miss)
             Consume(target);
-        }
     }
 
-    private HitGrade Judge(float absDeltaSec)
+    private HitAccuracy Judge(float absDeltaSec)
     {
-        if (absDeltaSec <= perfect)
-            return HitGrade.PERFECT;
-        if (absDeltaSec <= good)
-            return HitGrade.GOOD;
-        if (absDeltaSec <= miss)
-            return HitGrade.MISS;
-
-        return HitGrade.LATE;
+        if (absDeltaSec <= perfect) return HitAccuracy.Perfect;
+        if (absDeltaSec <= great)   return HitAccuracy.Great;
+        if (absDeltaSec <= good)    return HitAccuracy.Good;
+        return HitAccuracy.Miss;
     }
 
-    private void Emit(HitEvent hitEvent)
-    {
-        if (OnHit != null)
-            OnHit.Invoke(hitEvent);
-    }
+    private void Emit(HitEvent e) => OnHit?.Invoke(e);
 
     private bool TryGetNearestTarget(LaneId lane, double nowSec, out NoteData target, out double deltaSec)
     {
@@ -124,18 +93,17 @@ public class BeatJudgeSystem : MonoBehaviour
 
         for (int i = 0; i < notes.Count; ++i)
         {
-            NoteData stNoteData = notes[i];
+            var n = notes[i];
+            if (n.lane != lane) continue;
 
-            if (stNoteData.lane != lane)  continue;
+            float d = (float)(n.timeSec - nowSec);
+            float ad = Mathf.Abs(d);
 
-            float fDelta = (float)(stNoteData.timeSec - nowSec);
-            float fAbsDelta = Mathf.Abs(fDelta);
-
-            if (fAbsDelta <= consumeWindowSec && fAbsDelta < best)
+            if (ad <= consumeWindowSec && ad < best)
             {
-                best = fAbsDelta;
+                best = ad;
                 bestIdx = i;
-                deltaSec = fDelta;
+                deltaSec = d;
             }
         }
 
@@ -144,7 +112,6 @@ public class BeatJudgeSystem : MonoBehaviour
             target = notes[bestIdx];
             return true;
         }
-
         return false;
     }
 
